@@ -1,5 +1,5 @@
-#define _POSIX_C_SOURCE 2
-#define _XOPEN_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#define _XOPEN_SOURCE 500
 
 #define DEFAULT_CH_QUANT 16
 #define MAX_FIFO_NAME_LEN 20
@@ -12,6 +12,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <fcntl.h>
 #include <errno.h>
 
@@ -28,6 +29,11 @@ int createPipe(int pipefd[2]);
 int createChildren(pid_t* pids, long quantity, char* childrenName, char* resourceName, char* fifoPath, int pipeWrite);
 pid_t createChild(char* childName, char* resourceName, char* fifoPath, int pipeWrite);
 char* createChildName(char* namePrefix, long childNo);
+
+int procSleep(double time);
+
+int endChildren(char* fifoPath, pid_t* pids, long childrenQuantity);
+int waitChildren(pid_t* pids, long quantity);
 
 int main(int argc, char* argv[])
 {
@@ -66,8 +72,13 @@ int main(int argc, char* argv[])
 		return EXIT_FAILURE;
 
 	close(pipeRW[0]);	// close read end of pipe
-	sleep(3);
 	close(pipeRW[1]);	// close write end of pipe - unlocks children processes
+
+	if(!procSleep(time))
+		return EXIT_FAILURE;
+
+	if(!endChildren(fifoPath, pids, childrenQuant))
+		return EXIT_FAILURE;
 
 	free(pids);
 
@@ -291,6 +302,51 @@ char* createChildName(char* namePrefix, long childNo)
 	}
 	else
 		fprintf(stderr, "ERROR: createChildName: Unable to allocate children name buffer\n");
+
+	return res;
+}
+
+int procSleep(double time)
+{
+	long n_sleeptime = time * 1000000;
+	struct timespec t = { .tv_sec = n_sleeptime / 1000000000, .tv_nsec = n_sleeptime % 1000000000 };
+
+	int res = nanosleep(&t, NULL);
+	if(res == -1)
+		fprintf(stderr, "ERROR: procSleep: Unable to sleep for given time ( time: %f ms )\n", time);
+
+	return !res;
+}
+
+int endChildren(char* fifo, pid_t* pids, long childrenQuantity)
+{
+	int res = 1;
+	
+	int fd = open(fifo, O_RDONLY);
+	if((res = (fd != -1)))
+	{
+		res = waitChildren(pids, childrenQuantity);
+		close(fd);
+	}
+	else
+		fprintf(stderr, "ERROR: endInformChildren: Unable to open fifo for read\n");
+
+	return res;
+}
+
+int waitChildren(pid_t* pids, long quantity)
+{
+	int res = 1;
+	
+	for(long i = 0; i < quantity; i++)
+	{
+		if(waitid(P_PID, pids[i], NULL, WEXITED | WSTOPPED) == -1)
+		{	
+			fprintf(stderr, "ERROR: waitChildren: Waiting failure\n");
+			res = 0;
+			break;
+		}
+	}
 
 	return res;
 }

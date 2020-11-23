@@ -5,10 +5,16 @@
 #include <stdlib.h>
 
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <errno.h>
 
 int parseArgs(int argc, char** argv, char** resourceName, char** fifoPath);
 
 void waitForParent();
+
+int checkEnd(char* fifoPath);
 
 int main(int argc, char* argv[])
 {
@@ -28,7 +34,15 @@ int main(int argc, char* argv[])
 
 	waitForParent();
 
-	printf("%s ( resource: %s\tfifo: %s )\n", argv[0], resourceName, fifoPath);	
+	printf("started: %s ( resource: %s\tfifo: %s )\n", argv[0], resourceName, fifoPath);
+
+	int counter;
+	while(checkEnd(fifoPath))
+	{
+		counter++;
+	}
+
+	printf("ended: %s ( counter: %d )\n", argv[0], counter);
 	
 	return EXIT_SUCCESS;
 }
@@ -71,4 +85,25 @@ void waitForParent()
 
 	read(4, &temp, 1);
 	close(4);
+}
+
+int checkEnd(char* fifoPath)
+{
+	int res = 1;
+
+	errno = 0;
+	int fd = open(fifoPath, O_WRONLY | O_NONBLOCK);
+
+	if(fd != -1)
+	{
+		res = 0;
+		close(fd);
+	}
+	else if(errno != ENXIO)
+	{
+		fprintf(stderr, "ERROR: checkEnd: Unrecognized error while opening fifo file\n");
+		res = 0;
+	}
+
+	return res;
 }
