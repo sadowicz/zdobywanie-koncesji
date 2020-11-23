@@ -23,8 +23,10 @@ long strToChQuantity(char* str);
 int createFifo(char** path);
 char* randFifoName();
 
-int createChildren(pid_t* pids, long quantity, char* childrenName, char* resourceName, char* fifoPath);
-pid_t createChild(char* childName, char* resourceName, char* fifoPath);
+int createPipe(int pipefd[2]);
+
+int createChildren(pid_t* pids, long quantity, char* childrenName, char* resourceName, char* fifoPath, int pipeWrite);
+pid_t createChild(char* childName, char* resourceName, char* fifoPath, int pipeWrite);
 char* createChildName(char* namePrefix, long childNo);
 
 int main(int argc, char* argv[])
@@ -53,10 +55,19 @@ int main(int argc, char* argv[])
 
 	printf("fifo path: %s\n", fifoPath);
 
+	int pipeRW[2];
+	if(!createPipe(pipeRW))
+		return EXIT_FAILURE;
+	printf("%d\t%d\n", pipeRW[0], pipeRW[1]);
+
 	pid_t* pids = (pid_t*)malloc(childrenQuant * sizeof(pid_t));
 
-	if(!createChildren(pids, childrenQuant, childName, resourceName, fifoPath))
+	if(!createChildren(pids, childrenQuant, childName, resourceName, fifoPath, pipeRW[1]))
 		return EXIT_FAILURE;
+
+	close(pipeRW[0]);	// close read end of pipe
+	sleep(3);
+	close(pipeRW[1]);	// close write end of pipe - unlocks children processes
 
 	free(pids);
 
@@ -190,7 +201,34 @@ char* randFifoName()
 	return res;
 }
 
-int createChildren(pid_t* pids, long quantity, char* childrenName, char* resourceName, char* fifoPath)
+int createPipe(int pipefd[2])
+{
+	int res = 1;
+	if((res = (!pipe(pipefd))))
+	{
+		if(pipefd[1] == 4)
+		{
+			pipefd[1] = dup(pipefd[1]);
+			
+			if(!(res = (pipefd[1] != -1)))
+				fprintf(stderr, "ERROR: createPipe: Unable to dup pipe write\n");
+		}
+		
+		if(res)
+		{
+			pipefd[0] = dup2(pipefd[0], 4);
+		
+			if(!(res = (pipefd[0] != -1)))
+				fprintf(stderr, "ERROR: createPipe: Unable to dup pipe read descriptor to 4\n");
+		}
+	}
+	else
+		fprintf(stderr, "ERROR: createPipe: Unable to create pipe\n");
+	
+	return res;
+}
+
+int createChildren(pid_t* pids, long quantity, char* childrenName, char* resourceName, char* fifoPath, int pipeWrite)
 {
 	int res = 1;
 
@@ -200,7 +238,7 @@ int createChildren(pid_t* pids, long quantity, char* childrenName, char* resourc
 		if(!(res = (name != NULL)))
 			break;
 		
-		if((pids[i] = createChild(name, resourceName, fifoPath)) == -1)
+		if((pids[i] = createChild(name, resourceName, fifoPath, pipeWrite)) == -1)
 		{
 			res = 0;
 			free(name);
@@ -213,7 +251,7 @@ int createChildren(pid_t* pids, long quantity, char* childrenName, char* resourc
 	return res;
 }
 
-pid_t createChild(char* childName, char* resourceName, char* fifoPath)
+pid_t createChild(char* childName, char* resourceName, char* fifoPath, int pipeWrite)
 {
 	pid_t res = fork();
 
@@ -224,6 +262,8 @@ pid_t createChild(char* childName, char* resourceName, char* fifoPath)
 			break;
 
 		case 0:
+			close(pipeWrite);
+
 			if((res = execl("./poszukiwacz", childName, "-z", resourceName, "-s", fifoPath, (char*)NULL)) == -1)
 				fprintf(stderr, "ERROR: createChild: Unable to exec ./poszukiwacz ( child: %s )\n", childName);
 

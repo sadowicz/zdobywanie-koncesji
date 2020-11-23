@@ -8,6 +8,8 @@
 
 int parseArgs(int argc, char** argv, char** resourceName, char** fifoPath);
 
+void waitForParent();
+
 int main(int argc, char* argv[])
 {
 	if(argc != 5)
@@ -22,8 +24,12 @@ int main(int argc, char* argv[])
 	if(!parseArgs(argc, argv, &resourceName, &fifoPath))
 		return EXIT_FAILURE;
 	
-	printf("Hello from: %s ( resource: %s\tfifo: %s )\n", argv[0], resourceName, fifoPath);	
+	printf("Hello from: %s\n", argv[0]);
 
+	waitForParent();
+
+	printf("%s ( resource: %s\tfifo: %s )\n", argv[0], resourceName, fifoPath);	
+	
 	return EXIT_SUCCESS;
 }
 
@@ -57,4 +63,12 @@ int parseArgs(int argc, char** argv, char** resourceName, char** fifoPath)
 	}
 
 	return res;
+}
+
+void waitForParent()
+{
+	char temp;
+
+	read(4, &temp, 1);
+	close(4);
 }
