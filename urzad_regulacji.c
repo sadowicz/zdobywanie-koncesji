@@ -25,6 +25,8 @@ long strToChQuantity(char* str);
 int createFifo(char** path);
 char* randFifoName();
 
+int manageChildren(long time, long childrenQuant, char* childName, char* resourceName, char* fifoPath, struct timespec* fifoClosureTime);
+
 int createPipe(int pipefd[2]);
 
 int createChildren(pid_t* pids, long quantity, char* childrenName, char* resourceName, char* fifoPath, int pipeWrite);
@@ -42,57 +44,35 @@ int timespecLater(struct timespec* t1, struct timespec* t2); // check if t1 late
 
 int main(int argc, char* argv[])
 {
-	if(argc < 7 || argc > 10)
-	{
-		printf("USAGE: %s -t <time> -z <resource_name> -p <children_name> [-n <children_quantity>] [<fifo_path>]\n", argv[0]);
-		return EXIT_FAILURE;
+	int exitStatus = EXIT_SUCCESS;
+
+	if(!(exitStatus = !(argc >= 7 || argc <= 10)))
+	{	
+		double time = 0;
+		long childrenQuant = 0;
+
+		char* resourceName = NULL;
+		char* childName = NULL;
+		char* fifoPath = NULL;
+
+		if(!(exitStatus = !parseArgs(argc, argv, &time, &childrenQuant, &resourceName, &childName, &fifoPath) || !resourceName || !childName))
+		{
+			if(childrenQuant <= 4)
+				childrenQuant = DEFAULT_CH_QUANT;
+
+			if(!(exitStatus = !createFifo(&fifoPath)))
+			{	
+				struct timespec fifoClosureTime;
+
+				if(!(exitStatus = !manageChildren(time, childrenQuant, childName, resourceName, fifoPath, &fifoClosureTime)))
+					exitStatus = !cleanUp(childName, &fifoClosureTime);
+			}
+		}
 	}
-	
-	double time = 0;
-	long childrenQuant = 0;
+	else
+		printf("USAGE: %s -t <time> -z <resource_name> -p <children_name> [-n <children_quantity>] [<fifo_path>]\n", argv[0]);
 
-	char* resourceName = NULL;
-	char* childName = NULL;
-	char* fifoPath = NULL;
-
-	if(!parseArgs(argc, argv, &time, &childrenQuant, &resourceName, &childName, &fifoPath) || !resourceName || !childName)
-		return EXIT_FAILURE;
-
-	if(childrenQuant <= 4)
-		childrenQuant = DEFAULT_CH_QUANT;
-
-	if(!createFifo(&fifoPath))
-		return EXIT_FAILURE;
-
-	printf("fifo path: %s\n", fifoPath);
-
-	int pipeRW[2];
-	if(!createPipe(pipeRW))
-		return EXIT_FAILURE;
-	printf("%d\t%d\n", pipeRW[0], pipeRW[1]);
-
-	pid_t* pids = (pid_t*)malloc(childrenQuant * sizeof(pid_t));
-
-	if(!createChildren(pids, childrenQuant, childName, resourceName, fifoPath, pipeRW[1]))
-		return EXIT_FAILURE;
-
-	close(pipeRW[0]);	// close read end of pipe
-	close(pipeRW[1]);	// close write end of pipe - unlocks children processes
-	
-	if(!procSleep(time))
-		return EXIT_FAILURE;
-
-	struct timespec fifoClosureTime;
-
-	if(!endChildren(fifoPath, pids, childrenQuant, &fifoClosureTime))
-		return EXIT_FAILURE;
-
-	if(!cleanUp(childName, &fifoClosureTime))
-		return EXIT_FAILURE;
-
-	free(pids);
-
-	return EXIT_SUCCESS;
+	return exitStatus;
 }
 
 int parseArgs(int argc, char** argv, double* time, long* childrenQuantity, char** resourceName, char** childName, char** fifoPath)
@@ -222,6 +202,34 @@ char* randFifoName()
 	return res;
 }
 
+int manageChildren(long time, long childrenQuant, char* childName, char* resourceName, char* fifoPath, struct timespec* fifoClosureTime)
+{
+	int res = 1;
+
+	int pipeRW[2];
+	if((res = createPipe(pipeRW)))
+	{		
+		pid_t* pids = (pid_t*)malloc(childrenQuant * sizeof(pid_t));
+		if((res = (pids != NULL)))
+		{
+			if((res = createChildren(pids, childrenQuant, childName, resourceName, fifoPath, pipeRW[1])))
+			{
+				close(pipeRW[0]);	// close read end of pipe
+				close(pipeRW[1]);	// close write end of pipe - unlocks children processes
+				
+				if((res = procSleep(time)))
+					res = endChildren(fifoPath, pids, childrenQuant, fifoClosureTime);
+			}
+
+			free(pids);
+		}
+		else
+			fprintf(stderr, "ERROR: manageChildren: Unable to allocate children pids array\n");
+	}
+	
+	return res;
+}
+
 int createPipe(int pipefd[2])
 {
 	int res = 1;
@@ -291,7 +299,6 @@ pid_t createChild(char* childName, char* resourceName, char* fifoPath, int pipeW
 			break;
 
 		default:
-			printf("created: %s\n", childName);
 			break;
 	}
 
