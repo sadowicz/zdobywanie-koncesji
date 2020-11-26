@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <dirent.h>
 
 #include <unistd.h>
 #include <sys/types.h>
@@ -32,8 +33,12 @@ char* createChildName(char* namePrefix, long childNo);
 
 int procSleep(double time);
 
-int endChildren(char* fifoPath, pid_t* pids, long childrenQuantity);
+int endChildren(char* fifo, pid_t* pids, long childrenQuantity, struct timespec* fifoClosureTime);
 int waitChildren(pid_t* pids, long quantity);
+
+int cleanUp(char* childrenName, struct timespec* fifoClosureTime);
+int tryDelete(char*fileName, char* childrenName, struct timespec* fifoClosureTime);
+int timespecLater(struct timespec* t1, struct timespec* t2); // check if t1 later than t2
 
 int main(int argc, char* argv[])
 {
@@ -73,11 +78,16 @@ int main(int argc, char* argv[])
 
 	close(pipeRW[0]);	// close read end of pipe
 	close(pipeRW[1]);	// close write end of pipe - unlocks children processes
-
+	
 	if(!procSleep(time))
 		return EXIT_FAILURE;
 
-	if(!endChildren(fifoPath, pids, childrenQuant))
+	struct timespec fifoClosureTime;
+
+	if(!endChildren(fifoPath, pids, childrenQuant, &fifoClosureTime))
+		return EXIT_FAILURE;
+
+	if(!cleanUp(childName, &fifoClosureTime))
 		return EXIT_FAILURE;
 
 	free(pids);
@@ -318,18 +328,24 @@ int procSleep(double time)
 	return !res;
 }
 
-int endChildren(char* fifo, pid_t* pids, long childrenQuantity)
+int endChildren(char* fifo, pid_t* pids, long childrenQuantity, struct timespec* fifoClosureTime)
 {
 	int res = 1;
 	
 	int fd = open(fifo, O_RDONLY);
-	if((res = (fd != -1)))
-	{
-		res = waitChildren(pids, childrenQuantity);
-		close(fd);
+	if((res = (clock_gettime(CLOCK_REALTIME, fifoClosureTime) != -1)))
+	{		
+		if((res = (fd != -1)))
+		{
+
+			res = waitChildren(pids, childrenQuantity);
+			close(fd);
+		}
+		else
+			fprintf(stderr, "ERROR: endInformChildren: Unable to open fifo for read\n");
 	}
 	else
-		fprintf(stderr, "ERROR: endInformChildren: Unable to open fifo for read\n");
+		fprintf(stderr, "ERROR: endInformChildren: Unable to getFifoClosureTime\n");
 
 	return res;
 }
@@ -347,6 +363,65 @@ int waitChildren(pid_t* pids, long quantity)
 			break;
 		}
 	}
+
+	return res;
+}
+
+int cleanUp(char* childrenName, struct timespec* fifoClosureTime)
+{
+	int res = 1;
+
+	struct dirent* entry;
+	DIR* current = opendir(".");
+	if((res = (current != NULL)))
+	{
+		while((entry = readdir(current)) != NULL)
+		{
+			if(!(res = tryDelete(entry->d_name, childrenName, fifoClosureTime)))
+				break;
+		}
+
+		closedir(current);
+	}
+	else
+		fprintf(stderr, "ERROR: cleanUP: Unable to open current working directory\n");
+
+	return res;
+}
+
+int tryDelete(char*fileName, char* childrenName, struct timespec* fifoClosureTime)
+{
+	int res = 1;
+
+	if(!strncmp(fileName, "property", 8))
+	{
+		if(!(res = (remove(fileName) != -1)))
+			fprintf(stderr, "ERROR: tryDelete: Unable to remove file\n");
+	}
+	else if(!strncmp(fileName, childrenName, strlen(childrenName)))
+	{
+		struct stat fileStat;
+		if((res = (stat(fileName, &fileStat) != -1)))
+		{
+			if(timespecLater(&fileStat.st_atim, fifoClosureTime))
+			{	
+				if(!(res = (remove(fileName) != -1)))
+					fprintf(stderr, "ERROR: tryDelete: Unable to remove file\n");
+			}
+		}
+		else
+			fprintf(stderr, "ERROR: tryDelete: Unable to get file informaion\n");
+	}
+
+	return res;
+}
+
+int timespecLater(struct timespec* t1, struct timespec* t2)
+{
+	int res = 0;
+
+	if(t1->tv_sec > t2->tv_sec || (t1->tv_sec == t2->tv_sec && t1->tv_nsec > t2->tv_nsec))
+		res = 1;
 
 	return res;
 }
